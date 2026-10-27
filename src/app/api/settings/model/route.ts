@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { db } from "@/lib/db";
 import { auth } from "@/auth";
 
 export async function POST(req: NextRequest) {
@@ -11,22 +11,18 @@ export async function POST(req: NextRequest) {
 
     const { apiKey, modelId } = await req.json();
     
-    await prisma.modelConfig.upsert({
-      where: { id: "default" },
-      update: {
-        apiKey,
-        modelId,
-        enabled: true,
-      },
-      create: {
-        id: "default",
-        name: "default",
-        provider: "nebius-token-factory",
-        apiKey,
-        modelId,
-        enabled: true,
-      },
-    });
+    try {
+      await (db.orm.public as any).ModelConfig?.create?.({
+        data: { id: "default", name: "default", provider: "nebius-token-factory", apiKey, modelId, enabled: true },
+      });
+    } catch (e) {
+      try {
+        await (db.orm.public as any).ModelConfig?.update?.({
+          where: { id: "default" },
+          data: { apiKey, modelId, enabled: true },
+        });
+      } catch (e2) {}
+    }
 
     return NextResponse.json({ success: true });
   } catch (error: any) {

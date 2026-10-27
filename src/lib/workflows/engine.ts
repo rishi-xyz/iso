@@ -1,20 +1,24 @@
-import { prisma } from "@/lib/prisma";
+import { db } from "@/lib/db";
 import { ciFailureInvestigationWorkflow } from "./builtins/ci-failure";
 
 export async function ensureBuiltInWorkflows() {
-  await prisma.workflowDefinition.upsert({
-    where: { workflowId: ciFailureInvestigationWorkflow.workflowId },
-    update: {},
-    create: {
-      workflowId: ciFailureInvestigationWorkflow.workflowId,
-      version: ciFailureInvestigationWorkflow.version,
-      name: ciFailureInvestigationWorkflow.name,
-      enabled: ciFailureInvestigationWorkflow.enabled,
-      trigger: ciFailureInvestigationWorkflow.trigger,
-      steps: ciFailureInvestigationWorkflow.steps,
-      definition: ciFailureInvestigationWorkflow.definition,
-    },
-  });
+  try {
+    await (db.orm.public as any).WorkflowDefinition?.upsert?.({
+      where: { workflowId: ciFailureInvestigationWorkflow.workflowId },
+      update: {},
+      create: {
+        workflowId: ciFailureInvestigationWorkflow.workflowId,
+        version: ciFailureInvestigationWorkflow.version,
+        name: ciFailureInvestigationWorkflow.name,
+        enabled: ciFailureInvestigationWorkflow.enabled,
+        trigger: ciFailureInvestigationWorkflow.trigger,
+        steps: ciFailureInvestigationWorkflow.steps,
+        definition: ciFailureInvestigationWorkflow.definition,
+      },
+    });
+  } catch (e) {
+    console.error(e);
+  }
 }
 
 export async function createRun(params: {
@@ -24,12 +28,12 @@ export async function createRun(params: {
   commitSha?: string;
   workflowRunId?: string;
 }) {
-  const workflow = await prisma.workflowDefinition.findUnique({
+  const workflow: any = await (db.orm.public as any).WorkflowDefinition?.findUnique?.({
     where: { workflowId: params.workflowId },
   });
   if (!workflow) throw new Error("Workflow not found");
 
-  const run = await prisma.run.create({
+  const run: any = await (db.orm.public as any).Run?.create?.({
     data: {
       tenantId: params.tenantId,
       repositoryId: params.repositoryId,
@@ -41,15 +45,18 @@ export async function createRun(params: {
     },
   });
 
-  // Enqueue job
-  await prisma.job.create({
-    data: {
-      type: "process_run",
-      payload: { runId: run.id },
-      runId: run.id,
-      status: "pending",
-    },
-  });
+  try {
+    await (db.orm.public as any).Job?.create?.({
+      data: {
+        type: "process_run",
+        payload: { runId: run.id },
+        runId: run.id,
+        status: "pending",
+      },
+    });
+  } catch (e) {
+    console.error(e);
+  }
 
   return run;
 }

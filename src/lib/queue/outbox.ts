@@ -1,7 +1,7 @@
-import { prisma } from "@/lib/prisma";
+import { db } from "@/lib/db";
 
 export async function enqueueJob(type: string, payload: any, runId?: string) {
-  return prisma.job.create({
+  return (db.orm.public as any).Job?.create?.({
     data: {
       type,
       payload,

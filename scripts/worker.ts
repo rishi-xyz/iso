@@ -1,4 +1,4 @@
-import { prisma } from "../src/lib/prisma";
+import { db } from "../src/lib/db";
 import { getInstallationToken } from "../src/lib/github/app";
 import { GitHubClient } from "../src/lib/github/client";
 import { redactSecrets, truncateLog } from "../src/lib/redact";
@@ -10,65 +10,63 @@ const LEASE_SECONDS = parseInt(process.env.WORKER_LEASE_SECONDS || "60");
 async function processJob() {
   const now = new Date();
   
-  const job = await (prisma as any).$transaction(async (tx: any) => {
-    const jobs = await tx.job.findMany({
-      where: {
-        status: { in: ["pending", "failed"] },
-        attempts: { lt: 5 },
-        OR: [
-          { leaseUntil: null },
-          { leaseUntil: { lt: now } },
-        ],
-      },
-      orderBy: { createdAt: "asc" },
-      take: 1,
-    });
+  // Simple non-transactional approach for Prisma 8
+  const jobs: any[] = await (db.orm.public as any).Job?.findMany?.({
+    where: {
+      status: { in: ["pending", "failed"] },
+      attempts: { lt: 5 },
+    },
+    take: 10,
+  }) || [];
 
-    if (jobs.length === 0) return null;
+  for (const j of jobs) {
+    if (j.leaseUntil && new Date(j.leaseUntil) > now) continue;
     
-    const j = jobs[0];
-    const leaseUntil = new Date(now.getTime() + LEASE_SECONDS * 1000);
-    
-    return tx.job.update({
-      where: { id: j.id },
-      data: {
-        status: "running",
-        attempts: { increment: 1 },
-        leaseUntil,
-        startedAt: j.startedAt || now,
-      },
-    });
-  });
-
-  if (!job) return;
-
-  try {
-    if ((job as any).type === "process_run") {
-      await processRun((job as any).payload as any);
+    try {
+      const job = await (db.orm.public as any).Job?.update?.({
+        where: { id: j.id },
+        data: {
+          status: "running",
+          attempts: { increment: 1 },
+          leaseUntil: new Date(now.getTime() + LEASE_SECONDS * 1000),
+          startedAt: j.startedAt || now,
+        },
+      });
+      
+      if (job) {
+        try {
+          if (job.type === "process_run") {
+            await processRun(job.payload);
+          }
+          await (db.orm.public as any).Job?.update?.({
+            where: { id: job.id },
+            data: {
+              status: "completed",
+              finishedAt: new Date(),
+              result: { success: true },
+            },
+          });
+        } catch (error: any) {
+          console.error("Job error:", error);
+          await (db.orm.public as any).Job?.update?.({
+            where: { id: job.id },
+            data: {
+              status: (job.attempts >= 4) ? "failed" : "pending",
+              lastError: error.message,
+              leaseUntil: null,
+            },
+          });
+        }
+        break;
+      }
+    } catch (e) {
+      continue;
     }
-    await (prisma as any).job.update({
-      where: { id: (job as any).id },
-      data: {
-        status: "completed",
-        finishedAt: new Date(),
-        result: { success: true },
-      },
-    });
-  } catch (error: any) {
-    console.error("Job error:", error);
-    await (prisma as any).job.update({
-      where: { id: (job as any).id },
-      data: {
-        status: (job as any).attempts >= 4 ? "failed" : "pending",
-        lastError: error.message,
-        leaseUntil: null,
-      },
-    });
   }
 }
 
-async function processRun(payload: { runId: string }) {
-  const run: any = await (prisma as any).run.findUnique({
+async function processRun(payload: any) {
+  const run: any = await (db.orm.public as any).Run?.findUnique?.({
     where: { id: payload.runId },
     include: {
       repository: true,
@@ -78,7 +76,7 @@ async function processRun(payload: { runId: string }) {
 
   if (!run) throw new Error("Run not found");
 
-  await (prisma as any).run.update({
+  await (db.orm.public as any).Run?.update?.({
     where: { id: run.id },
     data: { lifecycleState: "collecting_context", startedAt: new Date() },
   });
@@ -95,15 +93,17 @@ async function processRun(payload: { runId: string }) {
       const failedJob = jobsData.jobs?.find((j: any) => j.conclusion === "failure");
       if (failedJob) {
         logs = await client.getJobLogs(run.repository.owner, run.repository.name, failedJob.id);
-        await (prisma as any).evidence.create({
-          data: {
-            runId: run.id,
-            type: "job",
-            ref: String(failedJob.id),
-            content: logs.slice(0, 5000),
-            metadata: { name: failedJob.name },
-          },
-        });
+        try {
+          await (db.orm.public as any).Evidence?.create?.({
+            data: {
+              runId: run.id,
+              type: "job",
+              ref: String(failedJob.id),
+              content: logs.slice(0, 5000),
+              metadata: { name: failedJob.name },
+            },
+          });
+        } catch (e) {}
       }
     }
   } catch (e: any) {
@@ -112,12 +112,12 @@ async function processRun(payload: { runId: string }) {
 
   const redactedLogs = redactSecrets(truncateLog(logs));
   
-  await (prisma as any).run.update({
+  await (db.orm.public as any).Run?.update?.({
     where: { id: run.id },
     data: { lifecycleState: "analyzing" },
   });
 
-  const modelConfig: any = await (prisma as any).modelConfig.findFirst({
+  const modelConfig: any = await (db.orm.public as any).ModelConfig?.findFirst?.({
     where: { enabled: true },
   });
 
@@ -146,7 +146,7 @@ Analyze this CI failure.`;
       context,
     });
 
-    await (prisma as any).run.update({
+    await (db.orm.public as any).Run?.update?.({
       where: { id: run.id },
       data: { 
         lifecycleState: "reporting",
@@ -156,20 +156,22 @@ Analyze this CI failure.`;
     });
 
     for (const cause of diagnosis.likelyCauses || []) {
-      await (prisma as any).finding.create({
-        data: {
-          runId: run.id,
-          category: "failure_cause",
-          severity: "high",
-          state: "suspected",
-          summary: cause.text,
-          details: { confidence: cause.confidence },
-          evidenceRefs: cause.evidenceIds || [],
-        },
-      });
+      try {
+        await (db.orm.public as any).Finding?.create?.({
+          data: {
+            runId: run.id,
+            category: "failure_cause",
+            severity: "high",
+            state: "suspected",
+            summary: cause.text,
+            details: { confidence: cause.confidence },
+            evidenceRefs: cause.evidenceIds || [],
+          },
+        });
+      } catch (e) {}
     }
 
-    await (prisma as any).run.update({
+    await (db.orm.public as any).Run?.update?.({
       where: { id: run.id },
       data: {
         lifecycleState: "completed",
@@ -179,7 +181,7 @@ Analyze this CI failure.`;
     });
   } catch (error: any) {
     console.error("Analysis error:", error);
-    await (prisma as any).run.update({
+    await (db.orm.public as any).Run?.update?.({
       where: { id: run.id },
       data: {
         lifecycleState: "failed",

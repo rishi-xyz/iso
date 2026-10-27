@@ -9,21 +9,24 @@
     "lint": "eslint",
     "postinstall": "prisma skills sync || exit 0",
     "worker": "tsx scripts/worker.ts",
-    "worker:dev": "tsx watch scripts/worker.ts"
+    "worker:dev": "tsx watch scripts/worker.ts",
+    "contract:emit": "prisma contract emit"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.3",
     "@prisma/client": "^7.10.1",
+    "@prisma/orm-postgres": "^8.0.0-rc.20",
     "date-fns": "^4.4.0",
+    "dotenv": "^18.0.9",
     "jsonwebtoken": "^9.0.3",
     "next": "16.4.3",
     "next-auth": "^5.0.0-beta.32",
-    "prisma": "^8.0.0-rc.27",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
+    "@prisma/cli-engine": "^0.9.0",
     "@tailwindcss/turbopack": "^4",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20",
@@ -31,6 +34,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.4.3",
+    "prisma": "^8.0.0-rc.27",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",
     "typescript": "^5"

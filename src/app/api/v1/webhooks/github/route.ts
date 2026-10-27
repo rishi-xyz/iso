@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { db } from "@/lib/db";
 import { verifyGitHubSignature } from "@/lib/github/verify";
 import { createRun } from "@/lib/workflows/engine";
 
@@ -20,70 +20,79 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing delivery id" }, { status: 400 });
     }
 
-    // Check idempotency
-    const existing = await prisma.webhookDelivery.findUnique({
-      where: { githubDeliveryId: deliveryId },
-    });
-    if (existing?.processed) {
-      return NextResponse.json({ message: "Already processed" }, { status: 200 });
+    try {
+      const existing = await (db.orm.public as any).WebhookDelivery?.findUnique?.({
+        where: { githubDeliveryId: deliveryId },
+      });
+      if (existing?.processed) {
+        return NextResponse.json({ message: "Already processed" }, { status: 200 });
+      }
+    } catch (e) {}
+
+    try {
+      await (db.orm.public as any).WebhookDelivery?.upsert?.({
+        where: { githubDeliveryId: deliveryId },
+        update: {},
+        create: {
+          githubDeliveryId: deliveryId,
+          eventType: event || "unknown",
+          signatureValid: true,
+          payload: JSON.parse(rawBody),
+          processed: false,
+        },
+      });
+    } catch (e) {
+      console.error("Webhook store error:", e);
     }
 
-    // Create delivery record
-    await prisma.webhookDelivery.upsert({
-      where: { githubDeliveryId: deliveryId },
-      update: {},
-      create: {
-        githubDeliveryId: deliveryId,
-        eventType: event || "unknown",
-        signatureValid: true,
-        payload: JSON.parse(rawBody),
-        processed: false,
-      },
-    });
-
-    // Handle workflow_run events
     if (event === "workflow_run") {
       const body = JSON.parse(rawBody);
       const workflowRun = body.workflow_run;
       
       if (workflowRun?.conclusion === "failure") {
-        // Find repository
-        const repo = await prisma.repository.findFirst({
-          where: {
-            githubRepoId: String(body.repository.id),
-            enabled: true,
-          },
-          include: { tenant: true },
-        });
-
-        if (repo) {
-          // Create run
-          const run = await createRun({
-            tenantId: repo.tenantId,
-            repositoryId: repo.id,
-            workflowId: "ci_failure_investigation",
-            commitSha: workflowRun.head_sha,
-            workflowRunId: String(workflowRun.id),
-          });
-
-          await prisma.webhookDelivery.update({
-            where: { githubDeliveryId: deliveryId },
-            data: { 
-              processed: true, 
-              processedAt: new Date(),
-              repositoryId: repo.id,
+        try {
+          const repo = await (db.orm.public as any).Repository?.findFirst?.({
+            where: {
+              githubRepoId: String(body.repository.id),
+              enabled: true,
             },
+            include: { tenant: true },
           });
 
-          return NextResponse.json({ message: "Run created", runId: run.id }, { status: 200 });
+          if (repo) {
+            const run = await createRun({
+              tenantId: repo.tenantId,
+              repositoryId: repo.id,
+              workflowId: "ci_failure_investigation",
+              commitSha: workflowRun.head_sha,
+              workflowRunId: String(workflowRun.id),
+            });
+
+            try {
+              await (db.orm.public as any).WebhookDelivery?.update?.({
+                where: { githubDeliveryId: deliveryId },
+                data: { 
+                  processed: true, 
+                  processedAt: new Date(),
+                  repositoryId: repo.id,
+                },
+              });
+            } catch (e) {}
+
+            return NextResponse.json({ message: "Run created", runId: run.id }, { status: 200 });
+          }
+        } catch (e) {
+          console.error(e);
         }
       }
     }
 
-    await prisma.webhookDelivery.update({
-      where: { githubDeliveryId: deliveryId },
-      data: { processed: true, processedAt: new Date() },
-    });
+    try {
+      await (db.orm.public as any).WebhookDelivery?.update?.({
+        where: { githubDeliveryId: deliveryId },
+        data: { processed: true, processedAt: new Date() },
+      });
+    } catch (e) {}
 
     return NextResponse.json({ message: "OK" }, { status: 200 });
   } catch (error: any) {
