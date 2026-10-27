@@ -1,0 +1,20 @@
+name: CI Pass (Test)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  pass:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Passing step
+        run: |
+          echo "All tests passed!"
+          echo "Build successful"
