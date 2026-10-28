@@ -34,21 +34,22 @@ export async function diagnoseWithTokenFactory(params: {
     },
     body: JSON.stringify({
       model: params.modelId,
-      temperature: 0.2,
-      max_tokens: 1024,
+      temperature: 0.1,
+      max_tokens: 2048,
+      response_format: { type: "json_object" },
       messages: [
         {
           role: "system",
           content: `You are an expert CI failure investigator. 
 You must distinguish observed facts from hypotheses. 
 Only cite evidence IDs that are provided. 
-Return valid JSON matching this schema exactly:
+Return ONLY valid JSON with no extra text, matching this schema exactly:
 {
-  "summary": string,
-  "observedFacts": [{"text": string, "evidenceIds": string[]}],
-  "likelyCauses": [{"text": string, "confidence": "low"|"medium"|"high", "evidenceIds": string[]}],
-  "recommendedChecks": string[],
-  "limitations": string[]
+  "summary": "string",
+  "observedFacts": [{"text": "string", "evidenceIds": ["string"]}],
+  "likelyCauses": [{"text": "string", "confidence": "low"|"medium"|"high", "evidenceIds": ["string"]}],
+  "recommendedChecks": ["string"],
+  "limitations": ["string"]
 }
 Do not claim tests passed unless explicitly stated in evidence. Mark uncertainties clearly.`
         },
@@ -66,13 +67,23 @@ Do not claim tests passed unless explicitly stated in evidence. Mark uncertainti
   }
 
   const json = await res.json();
-  const content = json.choices?.[0]?.message?.content || "";
+  let content = json.choices?.[0]?.message?.content || "";
+  if (Array.isArray(content)) {
+    content = content.map((c: any) => c.text || c.content || "").join("\n");
+  }
+  if (typeof content !== "string") content = String(content);
   
   // Try to parse JSON from content
   let parsed;
   try {
+    let cleaned = content.trim();
     // Remove markdown code blocks if present
-    const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    cleaned = cleaned.replace(/```json\s*/gi, "").replace(/```\s*/g, "");
+    // Try to find JSON object in text
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      cleaned = match[0];
+    }
     parsed = JSON.parse(cleaned);
   } catch (e) {
     throw new Error("Failed to parse model response as JSON");
